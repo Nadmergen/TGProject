@@ -36,9 +36,44 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    container_name: messenger-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - messenger-net
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: messenger-coturn
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
+    networks:
+      - messenger-net
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--lt-cred-mech"
+      - "--fingerprint"
+      - "--realm=messenger.local"
+      - "--user=turnuser:turnpass"
+      - "--min-port=49160"
+      - "--max-port=49200"
+
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
 
 networks:
   messenger-net:

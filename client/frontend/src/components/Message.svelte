@@ -1,91 +1,113 @@
 <script>
-  import { currentUser, chatHistory } from '../stores';
-  import { isSelectionMode, selectedIds, toggleSelection } from '../selectionStore';
-  import { DeleteMessage } from '../../wailsjs/go/main/App';
+    import { currentUser, chatHistory } from '../stores';
+    import { isSelectionMode, selectedIds, toggleSelection } from '../selectionStore';
+    import { deleteMessage } from '../chatService';
 
-  export let msg;
+    export let msg;
 
-  $: isMine = $currentUser && msg.sender === $currentUser.username;
-  $: msgId = msg.id;
-  $: isSelected = $selectedIds.includes(msgId);
+    $: isMine = $currentUser && msg.sender_id === $currentUser.id;
+    $: msgId = msg.id;
+    $: isSelected = $selectedIds.includes(msgId);
 
-  async function handleDelete() {
-    if (!confirm("Удалить сообщение?")) return;
-    const result = await DeleteMessage(msgId);
-    if (result === "success") {
-      chatHistory.update(list => list.filter(m => m.id !== msgId));
+    async function handleDelete() {
+        if (!confirm("Удалить сообщение?")) return;
+        await deleteMessage(msgId);
     }
-  }
 
-  function handleClick() {
-    if ($isSelectionMode) {
-      toggleSelection(msgId);
+    function handleClick() {
+        if ($isSelectionMode) {
+            toggleSelection(msgId);
+        }
     }
-  }
 
-  function handleLongPress(e) {
-    e.preventDefault();
-    $isSelectionMode = true;
-    toggleSelection(msgId);
-  }
+    function handleKeydown(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+        }
+    }
 
-  // Определяем видимость галочек
-  $: showTicks = isMine ? (msg.read ? '✓✓' : '✓') : null;
-  $: timeLabel = msg.readAt ? `просмотрено ${msg.readAt}` : '';
+    function handleLongPress(e) {
+        e.preventDefault();
+        $isSelectionMode = true;
+        toggleSelection(msgId);
+    }
+
+    $: showTicks = isMine ? (msg.read_at ? '✓✓' : (msg.delivered_at ? '✓✓' : '✓')) : null;
+    $: timeLabel = msg.read_at ? `просмотрено ${new Date(msg.read_at).toLocaleTimeString()}` : '';
+    $: displayTime = msg.created_at ? new Date(msg.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
 </script>
 
 <div
-  class="msg-row {isMine ? 'is-mine' : ''} {isSelected ? 'selected' : ''}"
-  on:click={handleClick}
-  on:contextmenu={handleLongPress}
-  role="button"
-  tabindex="0"
+        class="msg-row {isMine ? 'is-mine' : ''} {isSelected ? 'selected' : ''}"
+        on:click={handleClick}
+        on:keydown={handleKeydown}
+        on:contextmenu={handleLongPress}
+        role="button"
+        tabindex="0"
 >
-  {#if $isSelectionMode}
-    <div class="select-indicator {isSelected ? 'active' : ''}">
-      {#if isSelected}
-        <svg viewBox="0 0 24 24" fill="white">
-          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
-        </svg>
-      {/if}
-    </div>
-  {/if}
-
-  <div class="msg-bubble">
-    {#if !isMine}
-      <div class="sender-name">{msg.sender || 'Аноним'}</div>
-    {/if}
-
-    <div class="msg-content">
-      {#if msg.type === 'image'}
-        <img src={msg.file_url} alt="Message" class="chat-img" on:contextmenu={handleLongPress} />
-      {:else if msg.type === 'file'}
-        <div class="file-attach">
-          <span class="file-icon">📄</span>
-          <div class="file-details">
-            <span class="file-name">{msg.file_name || 'Файл'}</span>
-            <a href={msg.file_url} download={msg.file_name} class="dl-link">Скачать</a>
-          </div>
+    {#if $isSelectionMode}
+        <div class="select-indicator {isSelected ? 'active' : ''}">
+            {#if isSelected}
+                <svg viewBox="0 0 24 24" fill="white">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                </svg>
+            {/if}
         </div>
-      {:else}
-        <p class="text">{msg.content}</p>
-      {/if}
-    </div>
-
-    <div class="msg-footer">
-      <span class="time">{msg.time || '12:00'}</span>
-      {#if showTicks}
-        <span class="ticks {msg.read ? 'read' : ''}">{showTicks}</span>
-      {/if}
-    </div>
-
-    {#if timeLabel}
-      <div class="read-label">{timeLabel}</div>
     {/if}
-  </div>
+
+    <div class="msg-bubble">
+        {#if !isMine}
+            <div class="sender-name">{msg.sender_name || 'Пользователь'}</div>
+        {/if}
+
+        <div class="msg-content">
+            {#if msg.type === 'image'}
+                <img src={msg.file_url} alt="Message" class="chat-img" on:contextmenu={handleLongPress} />
+            {:else if msg.type === 'video'}
+                <video class="chat-video" src={msg.file_url} controls playsinline on:contextmenu={handleLongPress}>
+                    <track kind="captions" />
+                </video>
+            {:else if msg.type === 'file'}
+                <div class="file-attach">
+                    <span class="file-icon">📄</span>
+                    <div class="file-details">
+                        <span class="file-name">{msg.file_name || 'Файл'}</span>
+                        <a href={msg.file_url} download={msg.file_name} class="dl-link">Скачать</a>
+                    </div>
+                </div>
+            {:else if msg.type === 'voice'}
+                <div class="voice-message">
+                    <audio controls src={msg.file_url} style="max-width: 200px;"></audio>
+                    <span class="file-name">{msg.file_name || 'Голосовое сообщение'}</span>
+                </div>
+            {:else}
+                <p class="text">{msg.content}</p>
+            {/if}
+        </div>
+
+        <div class="msg-footer">
+            <span class="time">{displayTime}</span>
+            {#if showTicks}
+                <span class="ticks {msg.read_at ? 'read' : ''}">{showTicks}</span>
+            {/if}
+        </div>
+
+        {#if timeLabel}
+            <div class="read-label">{timeLabel}</div>
+        {/if}
+    </div>
 </div>
 
 <style>
+    .voice-message {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+    audio {
+        max-width: 200px;
+    }
   .msg-row {
     display: flex;
     width: 100%;
@@ -199,6 +221,13 @@
 
   .chat-img:hover {
     opacity: 0.9;
+  }
+
+  .chat-video {
+    width: 100%;
+    max-width: 360px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.2);
   }
 
   .file-attach {

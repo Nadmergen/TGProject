@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -12,6 +13,10 @@ import (
 type Middleware struct {
 	db *sql.DB
 }
+
+type ctxKey string
+
+const ctxKeyUserID ctxKey = "userID"
 
 func NewMiddleware(db *sql.DB) *Middleware {
 	return &Middleware{db: db}
@@ -52,14 +57,29 @@ func (m *Middleware) AuthRequired(next http.Handler) http.Handler {
 		}
 
 		// Добавляем userID в контекст
-		ctx := context.WithValue(r.Context(), "userID", userID)
+		ctx := context.WithValue(r.Context(), ctxKeyUserID, int64(userID))
 		r = r.WithContext(ctx)
 
 		// Добавляем userID в заголовок для других handlers
-		r.Header.Set("X-User-ID", string(rune(userID)))
+		r.Header.Set("X-User-ID", strconv.Itoa(userID))
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func getUserID(r *http.Request) (int64, bool) {
+	if v := r.Context().Value(ctxKeyUserID); v != nil {
+		if id, ok := v.(int64); ok && id > 0 {
+			return id, true
+		}
+	}
+	// Fallback (legacy) for handlers still using header.
+	if s := strings.TrimSpace(r.Header.Get("X-User-ID")); s != "" {
+		if id, err := strconv.ParseInt(s, 10, 64); err == nil && id > 0 {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 // === MIDDLEWARE: CORS ===

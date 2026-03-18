@@ -1,24 +1,30 @@
 <script>
-  import { showDrawer, isSidebarOpen, innerWidth } from '../stores';
+    import { showDrawer, isSidebarOpen, innerWidth, recipient } from '../stores';
+    import { setActiveRecipient } from '../chatService';
+
+    function selectDefaultChat() {
+        setActiveRecipient(1, 'Общий чат');
+        if ($innerWidth < 750) isSidebarOpen.set(false);
+    }
 </script>
 
 <aside class="sidebar-root">
-  <div class="sidebar-top">
-    <button class="burger-menu" on:click={() => showDrawer.set(true)}>☰</button>
-    <div class="search-box">
-      <input type="text" placeholder="🔍 Поиск" />
+    <div class="sidebar-top">
+        <button class="burger-menu" on:click={() => showDrawer.set(true)}>☰</button>
+        <div class="search-box">
+            <input type="text" placeholder="🔍 Поиск" />
+        </div>
     </div>
-  </div>
 
-  <div class="items-container">
-    <div class="chat-row active" on:click={() => { if($innerWidth < 750) isSidebarOpen.set(false) }}>
-      <div class="chat-avatar-circle">O</div>
-      <div class="chat-meta">
-        <div class="chat-row-name">Общий чат</div>
-        <div class="chat-row-last">Добро пожаловать!</div>
-      </div>
+    <div class="items-container">
+        <button type="button" class="chat-row active" on:click={selectDefaultChat}>
+            <div class="chat-avatar-circle">O</div>
+            <div class="chat-meta">
+                <div class="chat-row-name">Общий чат</div>
+                <div class="chat-row-last">Добро пожаловать!</div>
+            </div>
+        </button>
     </div>
-  </div>
 </aside>
 
 <style>
