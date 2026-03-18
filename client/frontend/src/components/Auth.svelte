@@ -1,5 +1,6 @@
 <script>
   import { currentUser, isLoggedIn } from '../stores';
+  import { API_URL } from '../config';
 
   // Состояния: 'login' (вход) | 'register-email' (почта) | 'register-verify' (код)
   let step = 'login';
@@ -18,7 +19,7 @@
       if (step === 'login') {
         if (!user.trim() || !pass.trim()) { err = "Заполните поля"; isLoading = false; return; }
 
-        const res = await fetch('http://localhost:8080/api/auth/login', {
+        const res = await fetch(`${API_URL}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: user.trim(), password: pass })
@@ -38,7 +39,7 @@
       else if (step === 'register-email') {
         if (!email.trim()) { err = "Введите email"; isLoading = false; return; }
 
-        const res = await fetch('http://localhost:8080/api/auth/init-register', {
+        const res = await fetch(`${API_URL}/api/auth/init-register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: email.trim() })
@@ -59,15 +60,15 @@
           err = "Заполните все поля"; isLoading = false; return;
         }
 
-        // Бэкенд должен принять почту, код, придуманный логин и пароль
-        const res = await fetch('http://localhost:8080/api/auth/register', {
+        const res = await fetch(`${API_URL}/api/auth/verify-code`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email: email.trim(),
             code: code.trim(),
             username: user.trim(),
-            password: pass
+            password: pass,
+            phone: ''
           })
         });
         const data = await res.json();

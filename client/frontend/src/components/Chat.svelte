@@ -1,102 +1,127 @@
 <script>
-  import { afterUpdate, tick } from 'svelte';
-  import { chatHistory, currentUser } from '../stores';
-  import { isSelectionMode, selectedIds, clearSelection } from '../selectionStore';
-  import { SendMessage } from '../../wailsjs/go/main/App';
-  import { handleUpload } from '../chatService';
-  import Message from './Message.svelte';
+    import { afterUpdate, tick } from 'svelte';
+    import { chatHistory, currentUser, recipient, isSidebarOpen, innerWidth } from '../stores';
+    import { isSelectionMode, selectedIds, clearSelection } from '../selectionStore';
+    import { sendTextMessage, deleteMessage, sendAttachment } from '../chatService';
+    import { startOutgoingCall } from '../callService';
+    import Message from './Message.svelte';
 
-  export let toggleInfo;
-  let text = "";
-  let scrollBox;
+    export let toggleInfo;
+    let text = "";
+    let scrollBox;
+    let fileInput;
 
-  async function handleSend() {
-    if (!text.trim()) return;
-    const name = $currentUser?.username || "Аноним";
-    await SendMessage(name, text, "text", "", "");
-    text = "";
-    await tick();
-    if (scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
-  }
-
-  async function handleBulkDelete() {
-    if (confirm(`Удалить ${$selectedIds.length} сообщений?`)) {
-      const { DeleteMessage } = await import('../../wailsjs/go/main/App');
-      for (let id of $selectedIds) {
-        await DeleteMessage(id);
-      }
-      chatHistory.update(list => list.filter(m => !$selectedIds.includes(m.id)));
-      clearSelection();
+    async function handleSend() {
+        if (!text.trim() || !$recipient?.id) return;
+        await sendTextMessage(text);
+        text = "";
+        await tick();
+        if (scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
     }
-  }
 
-  function handleForward() {
-    alert(`Пересылка сообщений: ${$selectedIds.join(', ')}\n(Здесь откроется окно выбора контакта)`);
-    clearSelection();
-  }
+    async function handleBulkDelete() {
+        const ids = $selectedIds;
+        if (!ids.length) return;
+        if (!confirm(`Удалить ${ids.length} сообщений?`)) return;
 
-  afterUpdate(() => {
-    if (scrollBox && !$isSelectionMode) scrollBox.scrollTop = scrollBox.scrollHeight;
-  });
+        for (let id of ids) {
+            await deleteMessage(id);
+        }
+        clearSelection();
+    }
+
+    function handleForward() {
+        alert(`Пересылка сообщений: ${$selectedIds.join(', ')}\n(Здесь откроется окно выбора контакта)`);
+        clearSelection();
+    }
+
+    function toggleSidebar() {
+        isSidebarOpen.set(!$isSidebarOpen);
+    }
+
+    function pickFile() {
+        fileInput.click();
+    }
+
+    async function onFileSelected(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        await sendAttachment(file);
+        fileInput.value = '';
+    }
+
+    afterUpdate(() => {
+        if (scrollBox && !$isSelectionMode) scrollBox.scrollTop = scrollBox.scrollHeight;
+    });
 </script>
 
 <div class="chat-content">
-  {#if $isSelectionMode && $selectedIds.length > 0}
-    <header class="chat-header selection-header">
-      <div class="sel-left">
-        <button class="icon-btn" on:click={clearSelection}>✕</button>
-        <span class="sel-count">Выбрано: {$selectedIds.length}</span>
-      </div>
-      <div class="sel-actions">
-        <button class="action-btn" on:click={handleForward}>➔ Переслать</button>
-        <button class="action-btn danger" on:click={handleBulkDelete}>🗑 Удалить</button>
-      </div>
-    </header>
-  {:else}
-    <header class="chat-header" on:click={toggleInfo}>
-      <div class="chat-info-block">
-        <h2 class="chat-title">Общий чат</h2>
-        <span class="chat-status">онлайн</span>
-      </div>
-      <button class="info-btn" title="Информация">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-      </button>
-    </header>
-  {/if}
-
-  <div class="messages-area" bind:this={scrollBox}>
-    {#if $chatHistory && $chatHistory.length > 0}
-      {#each $chatHistory as msg (msg.id || Math.random())}
-        <Message {msg} />
-      {/each}
+    {#if $isSelectionMode && $selectedIds.length > 0}
+        <header class="chat-header selection-header">
+            <div class="sel-left">
+                <button class="icon-btn" on:click={clearSelection}>✕</button>
+                <span class="sel-count">Выбрано: {$selectedIds.length}</span>
+            </div>
+            <div class="sel-actions">
+                <button class="action-btn" on:click={handleForward}>➔ Переслать</button>
+                <button class="action-btn danger" on:click={handleBulkDelete}>🗑 Удалить</button>
+            </div>
+        </header>
     {:else}
-      <div class="empty">Сообщений пока нет...</div>
+        <header class="chat-header">
+            <div class="chat-header-left">
+                <button class="sidebar-toggle-btn" on:click={toggleSidebar} title="Показать/скрыть список чатов">
+                    ☰
+                </button>
+                <button type="button" class="chat-info-block" on:click={toggleInfo}>
+                    <h2 class="chat-title">{$recipient?.username || 'Общий чат'}</h2>
+                    <span class="chat-status">онлайн</span>
+                </button>
+            </div>
+            <div class="call-actions">
+                <button class="icon-btn" title="Голосовой звонок" on:click={() => startOutgoingCall('voice')}>📞</button>
+                <button class="icon-btn" title="Видеозвонок" on:click={() => startOutgoingCall('video')}>🎥</button>
+            </div>
+            <button class="info-btn" title="Информация" on:click={toggleInfo}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+            </button>
+        </header>
     {/if}
-  </div>
 
-  <div class="input-container">
-    <button class="icon-btn attach-btn" on:click={handleUpload} title="Прикрепить файл">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 0 19.8-4.3M22 5.5a10 10 0 0 0-19.8 4.2"></path>
-      </svg>
-    </button>
-    <input
-      type="text"
-      bind:value={text}
-      on:keydown={(e) => e.key === 'Enter' && handleSend()}
-      placeholder="Написать сообщение..."
-      class="message-input"
-    />
-    <button class="send-btn" on:click={handleSend} disabled={!text.trim()} title="Отправить (Enter)">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M16.6915026,12.4744748 L3.50612381,13.2599618 C3.19218622,13.2599618 3.03521743,13.4170592 3.03521743,13.5741566 L1.15159189,20.0151496 C0.8376543,20.8006365 0.99,21.89 1.77946707,22.52 C2.41,22.99 3.50612381,23.1 4.13399899,22.8429026 L21.714504,14.0454487 C22.6563168,13.5741566 23.1272231,12.6315722 22.9702544,11.6889879 L4.13399899,1.16770959 C3.34915502,0.9106122 2.40734225,1.0177098 1.77946707,1.4890019 C0.994623095,2.1605983 0.837654326,3.10604706 1.15159189,3.89154405 L3.03521743,10.3325371 C3.03521743,10.4896346 3.19218622,10.646732 3.50612381,10.646732 L16.6915026,11.4322189 C16.6915026,11.4322189 17.1624089,11.4322189 17.1624089,12.0038152 C17.1624089,12.4744748 16.6915026,12.4744748 16.6915026,12.4744748 Z"></path>
-      </svg>
-    </button>
-  </div>
+    <div class="messages-area" bind:this={scrollBox}>
+        {#if $chatHistory && $chatHistory.length > 0}
+            {#each $chatHistory as msg (msg.id)}
+                <Message {msg} />
+            {/each}
+        {:else}
+            <div class="empty">Сообщений пока нет...</div>
+        {/if}
+    </div>
+
+    <div class="input-container">
+        <input type="file" bind:this={fileInput} on:change={onFileSelected} style="display: none;" accept="*/*" />
+        <button class="icon-btn attach-btn" on:click={pickFile} title="Прикрепить файл">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 0 19.8-4.3M22 5.5a10 10 0 0 0-19.8 4.2"></path>
+            </svg>
+        </button>
+        <input
+                type="text"
+                bind:value={text}
+                on:keydown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Написать сообщение..."
+                class="message-input"
+        />
+        <button class="send-btn" on:click={handleSend} disabled={!text.trim() || !$recipient?.id} title="Отправить (Enter)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M16.6915026,12.4744748 L3.50612381,13.2599618 C3.19218622,13.2599618 3.03521743,13.4170592 3.03521743,13.5741566 L1.15159189,20.0151496 C0.8376543,20.8006365 0.99,21.89 1.77946707,22.52 C2.41,22.99 3.50612381,23.1 4.13399899,22.8429026 L21.714504,14.0454487 C22.6563168,13.5741566 23.1272231,12.6315722 22.9702544,11.6889879 L4.13399899,1.16770959 C3.34915502,0.9106122 2.40734225,1.0177098 1.77946707,1.4890019 C0.994623095,2.1605983 0.837654326,3.10604706 1.15159189,3.89154405 L3.03521743,10.3325371 C3.03521743,10.4896346 3.19218622,10.646732 3.50612381,10.646732 L16.6915026,11.4322189 C16.6915026,11.4322189 17.1624089,11.4322189 17.1624089,12.0038152 C17.1624089,12.4744748 16.6915026,12.4744748 16.6915026,12.4744748 Z"></path>
+            </svg>
+        </button>
+    </div>
 </div>
 
 <style>
@@ -117,6 +142,13 @@
   .chat-info-block { flex: 1; min-width: 0; }
   .chat-title { margin: 0; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: white; }
   .chat-status { font-size: 12px; color: #4faeef; }
+
+  .call-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-right: 6px;
+  }
 
   .info-btn {
     background: none;

@@ -12,17 +12,26 @@ type Client struct {
 	hub      *Hub
 	conn     *websocket.Conn
 	send     chan interface{}
-	userID   int
+	userID   int64
 	username string
 }
 
 type Message struct {
 	Type        string    `json:"type"`
-	SenderID    int       `json:"sender_id"`
-	RecipientID int       `json:"recipient_id"`
+	SenderID    int64     `json:"sender_id"`
+	RecipientID int64     `json:"recipient_id"`
 	Content     string    `json:"content"`
 	MsgType     string    `json:"msg_type"`
 	Timestamp   time.Time `json:"timestamp"`
+}
+
+type wsInbound struct {
+	Event       string          `json:"event"`
+	RecipientID int64           `json:"recipient_id,omitempty"`
+	ID          int64           `json:"id,omitempty"`
+	SDP         json.RawMessage `json:"sdp,omitempty"`
+	Candidate   json.RawMessage `json:"candidate,omitempty"`
+	CallType    string          `json:"call_type,omitempty"` // voice|video
 }
 
 func (c *Client) readPump() {
@@ -38,8 +47,8 @@ func (c *Client) readPump() {
 	})
 
 	for {
-		var msg Message
-		err := c.conn.ReadJSON(&msg)
+		var in wsInbound
+		err := c.conn.ReadJSON(&in)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("❌ WebSocket error: %v", err)
@@ -47,11 +56,31 @@ func (c *Client) readPump() {
 			break
 		}
 
-		msg.Timestamp = time.Now()
-		msg.SenderID = c.userID
-
-		// Broadcast to all connected clients
-		c.hub.broadcast <- msg
+		switch in.Event {
+		case "call_offer", "call_answer", "call_ice", "call_hangup":
+			if in.RecipientID <= 0 {
+				continue
+			}
+			c.hub.SendToUser(in.RecipientID, map[string]interface{}{
+				"event":       in.Event,
+				"sender_id":   c.userID,
+				"recipient_id": in.RecipientID,
+				"call_type":   in.CallType,
+				"sdp":         json.RawMessage(in.SDP),
+				"candidate":   json.RawMessage(in.Candidate),
+				"id":          in.ID,
+				"timestamp":   time.Now(),
+			})
+		default:
+			// keep legacy broadcast path for any other messages
+			inMsg := Message{
+				Type:        "event",
+				SenderID:    c.userID,
+				RecipientID: in.RecipientID,
+				Timestamp:   time.Now(),
+			}
+			c.hub.broadcast <- inMsg
+		}
 	}
 }
 

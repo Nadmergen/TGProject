@@ -181,7 +181,7 @@ func (s *SMTPEmailService) buildHTMLEmail(code string) string {
 <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0e1621; color: white; padding: 20px; margin: 0;">
 	<div style="max-width: 500px; margin: 0 auto;">
 		<!-- Header -->
-		<div style="background: linear-gradient(135deg, #4faeef 0%, #2b5278 100%); border-radius: 12px 12px 0 0; padding: 40px 20px; text-align: center;">
+		<div style="background: linear-gradient(135deg, #4faeef 0%%, #2b5278 100%%); border-radius: 12px 12px 0 0; padding: 40px 20px; text-align: center;">
 			<h1 style="font-size: 32px; margin: 0; color: white;">💬</h1>
 			<h2 style="font-size: 24px; margin: 10px 0 0 0; color: white;">Messenger</h2>
 		</div>

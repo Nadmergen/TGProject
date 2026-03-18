@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -113,7 +114,7 @@ func (a *App) InitRegister(email string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(result.Message)
+		return nil, errors.New(result.Message)
 	}
 	return map[string]interface{}{
 		"status":  result.Status,
@@ -145,7 +146,7 @@ func (a *App) VerifyCode(email, code, username, password, phone string) (map[str
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(result.Message)
+		return nil, errors.New(result.Message)
 	}
 
 	// Сохраняем данные
@@ -202,7 +203,7 @@ func (a *App) Login(username, password string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(result.Message)
+		return nil, errors.New(result.Message)
 	}
 
 	// Если требуется 2FA
@@ -251,7 +252,7 @@ func (a *App) Verify2FA(userID int, code string) (map[string]interface{}, error)
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(result.Message)
+		return nil, errors.New(result.Message)
 	}
 
 	a.token = result.Token

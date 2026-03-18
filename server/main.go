@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,11 +53,19 @@ func main() {
 	hub := NewHub()
 	go hub.Run()
 
+	// Middleware
+	mw := NewMiddleware(db)
+
 	// Service layer
 	authService := NewAuthService(db, cache)
-	messageService := NewMessageService(db, cache)
+	messageService := NewMessageService(db, cache, hub)
 	contactService := NewContactService(db, cache)
 	voiceService := NewVoiceService(db, cache)
+	profileService := NewProfileService(db)
+	uploadService, uploadErr := NewUploadService(db)
+	if uploadErr != nil {
+		log.Printf("⚠️ Upload service disabled: %v\n", uploadErr)
+	}
 
 	// API routes
 	mux := http.NewServeMux()
@@ -70,26 +79,37 @@ func main() {
 	mux.HandleFunc("/api/auth/login", authService.LoginHandler)
 	mux.HandleFunc("/api/auth/verify-2fa", authService.Verify2FAHandler)
 	mux.HandleFunc("/api/auth/logout", authService.LogoutHandler)
+	mux.Handle("/api/messages/read", mw.AuthRequired(http.HandlerFunc(messageService.MarkAsReadHandler)))
+
+	// ===== PROFILE =====
+	mux.Handle("/api/profile/update", mw.AuthRequired(http.HandlerFunc(profileService.UpdateProfileHandler)))
 
 	// ===== WEBSOCKET =====
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocket(hub, w, r)
+		handleWebSocket(hub, db, w, r)
 	})
 
 	// ===== MESSAGES ENDPOINTS =====
-	mux.HandleFunc("/api/messages", messageService.GetMessagesHandler)
-	mux.HandleFunc("/api/messages/send", messageService.SendMessageHandler)
-	mux.HandleFunc("/api/messages/delete", messageService.DeleteMessageHandler)
-	mux.HandleFunc("/api/messages/search", messageService.SearchMessagesHandler)
+	mux.Handle("/api/messages", mw.AuthRequired(http.HandlerFunc(messageService.GetMessagesHandler)))
+	mux.Handle("/api/messages/send", mw.AuthRequired(http.HandlerFunc(messageService.SendMessageHandler)))
+	mux.Handle("/api/messages/delete", mw.AuthRequired(http.HandlerFunc(messageService.DeleteMessageHandler)))
+	mux.Handle("/api/messages/search", mw.AuthRequired(http.HandlerFunc(messageService.SearchMessagesHandler)))
 
 	// ===== CONTACTS ENDPOINTS =====
-	mux.HandleFunc("/api/contacts", contactService.GetContactsHandler)
-	mux.HandleFunc("/api/contacts/add", contactService.AddContactHandler)
-	mux.HandleFunc("/api/contacts/sync", contactService.SyncContactsHandler)
+	mux.Handle("/api/contacts", mw.AuthRequired(http.HandlerFunc(contactService.GetContactsHandler)))
+	mux.Handle("/api/contacts/add", mw.AuthRequired(http.HandlerFunc(contactService.AddContactHandler)))
+	mux.Handle("/api/contacts/sync", mw.AuthRequired(http.HandlerFunc(contactService.SyncContactsHandler)))
 
 	// ===== VOICE MESSAGES ENDPOINTS =====
-	mux.HandleFunc("/api/voice/upload", voiceService.UploadVoiceHandler)
-	mux.HandleFunc("/api/voice/download", voiceService.DownloadVoiceHandler)
+	mux.Handle("/api/voice/upload", mw.AuthRequired(http.HandlerFunc(voiceService.UploadVoiceHandler)))
+	mux.Handle("/api/voice/download", mw.AuthRequired(http.HandlerFunc(voiceService.DownloadVoiceHandler)))
+
+	// ===== UPLOADS (S3/MinIO) =====
+	if uploadService != nil {
+		mux.Handle("/api/uploads/init", mw.AuthRequired(http.HandlerFunc(uploadService.InitUploadHandler)))
+		mux.Handle("/api/uploads/complete", mw.AuthRequired(http.HandlerFunc(uploadService.CompleteUploadHandler)))
+		mux.Handle("/api/uploads/download", mw.AuthRequired(http.HandlerFunc(uploadService.PresignDownloadHandler)))
+	}
 
 	// ===== CALLS ENDPOINTS =====
 	mux.HandleFunc("/api/calls/start", handleCallStart)
@@ -266,6 +286,11 @@ func initPostgres() *sql.DB {
 		log.Println("⚠️ Schema creation warning:", err)
 	}
 
+	// Lightweight migrations (best-effort).
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;`); err != nil {
+		log.Println("⚠️ Migration warning (delivered_at):", err)
+	}
+
 	log.Println("✅ PostgreSQL connected")
 	return db
 }
@@ -288,11 +313,35 @@ func initRedis() *redis.Client {
 }
 
 // === WEBSOCKET ===
-func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func handleWebSocket(hub *Hub, db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{
 		CheckOrigin:     func(r *http.Request) bool { return true },
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
+	}
+
+	// Authenticate via query param token (browser-friendly).
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		token = strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var userID int64
+	var username string
+	err := db.QueryRow(
+		`SELECT u.id, u.username
+		 FROM sessions s
+		 JOIN users u ON u.id = s.user_id
+		 WHERE s.token = $1 AND s.expires_at > NOW()`,
+		token,
+	).Scan(&userID, &username)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -305,6 +354,8 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		hub:  hub,
 		conn: conn,
 		send: make(chan interface{}, 512),
+		userID: userID,
+		username: username,
 	}
 
 	hub.register <- client

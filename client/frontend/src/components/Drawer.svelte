@@ -1,52 +1,114 @@
 <script>
-  import { showDrawer, currentUser, isLoggedIn } from '../stores';
-  import { fade, fly } from 'svelte/transition';
+    import { showDrawer, currentUser, isLoggedIn, language } from '../stores';
+    import { fade, fly } from 'svelte/transition';
+    import { API_URL } from '../config';
+    import { t, setLang } from '../i18n';
 
-  let activeTab = 'menu'; // menu | profile | contacts
-  let contacts = [];
-  let isSaving = false;
-  let saveStatus = '';
+    let activeTab = 'menu';
+    let contacts = [];
+    let isSaving = false;
+    let saveStatus = '';
 
-  let profileForm = {
-    name: $currentUser?.username || '',
-    status: 'Установить эмодзи-статус',
-    phone: '',
-    email: ''
-  };
+    let profileForm = {
+        name: $currentUser?.username || '',
+        status: 'Установить эмодзи-статус',
+        phone: '',
+        email: ''
+    };
 
-  function switchTab(tab) {
-    activeTab = tab;
-  }
-
-  async function saveProfile() {
-    isSaving = true;
-    saveStatus = '';
-    try {
-      await new Promise(r => setTimeout(r, 500));
-      $currentUser.username = profileForm.name;
-      saveStatus = '✓ Изменения сохранены';
-      setTimeout(() => saveStatus = '', 2000);
-    } catch (err) {
-      saveStatus = '✗ Ошибка сохранения';
+    function switchTab(tab) {
+        activeTab = tab;
     }
-    isSaving = false;
-  }
 
-  function logout() {
-    if (confirm("Вы уверены, что хотите выйти?")) {
-      isLoggedIn.set(false);
-      showDrawer.set(false);
-      location.reload();
+    async function saveProfile() {
+        isSaving = true;
+        saveStatus = '';
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/profile/update`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    username: profileForm.name,
+                    status: profileForm.status,
+                    phone: profileForm.phone,
+                    email: profileForm.email
+                })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Save failed');
+            currentUser.set({ ...$currentUser, username: data.username, status: data.status });
+            saveStatus = t('savedOk');
+            setTimeout(() => saveStatus = '', 2000);
+        } catch (err) {
+            saveStatus = t('savedErr');
+        }
+        isSaving = false;
     }
-  }
 
-  function addContact() {
-    alert("Добавить контакт (To do)");
-  }
+    async function logout() {
+        if (confirm("Вы уверены, что хотите выйти?")) {
+            const token = localStorage.getItem('token');
+            if (token) {
+                try {
+                    await fetch(`${API_URL}/api/auth/logout`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                } catch (_) {
+                    // ignore logout errors; we'll still clear local state
+                }
+            }
+            localStorage.removeItem('token');
+            localStorage.removeItem('user_id');
+            isLoggedIn.set(false);
+            showDrawer.set(false);
+            currentUser.set(null);
+        }
+    }
+
+    function addContact() {
+        const name = prompt(t('contactNamePrompt'));
+        if (!name) return;
+        const phone = prompt(t('contactPhonePrompt')) || '';
+        createContact(name, phone);
+    }
+
+    async function loadContacts() {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/contacts`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) contacts = data;
+        } catch (_) {}
+    }
+
+    async function createContact(name, phone) {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/contacts/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ name, phone })
+            });
+            await res.json();
+            await loadContacts();
+        } catch (_) {}
+    }
+
+    $: if (activeTab === 'contacts' && $showDrawer) loadContacts();
 </script>
 
-<div class="drawer-overlay" on:click={() => showDrawer.set(false)} transition:fade={{duration: 150}}>
-  <div class="drawer-content" on:click|stopPropagation transition:fly={{x: -300, duration: 250}}>
+<svelte:window on:keydown={(e) => e.key === 'Escape' && $showDrawer && showDrawer.set(false)} />
+
+{#if $showDrawer}
+<div class="drawer-overlay" on:mousedown={() => showDrawer.set(false)} transition:fade={{duration: 150}}>
+  <div class="drawer-content" on:mousedown|stopPropagation transition:fly={{x: -300, duration: 250}}>
 
     <!-- ГЛАВНОЕ МЕНЮ -->
     {#if activeTab === 'menu'}
@@ -57,8 +119,8 @@
           </div>
           <div class="user-meta">
             <div class="user-name">{$currentUser?.username}</div>
-            <button class="status-btn">
-              Установить эмодзи-статус
+            <button class="status-btn" on:click={() => switchTab('profile')}>
+              {$currentUser?.status || t('setEmojiStatus')}
               <span class="dropdown">∨</span>
             </button>
           </div>
@@ -67,12 +129,12 @@
         <div class="menu-list">
           <button class="menu-btn" on:click={() => switchTab('profile')}>
             <span class="icon">👤</span>
-            <span>Мой профиль</span>
+            <span>{t('myProfile')}</span>
           </button>
 
           <button class="menu-btn" on:click={() => switchTab('contacts')}>
             <span class="icon">📞</span>
-            <span>Контакты</span>
+            <span>{t('contacts')}</span>
             <span class="badge">НОВОЕ</span>
           </button>
 
@@ -93,8 +155,16 @@
 
           <button class="menu-btn">
             <span class="icon">⚙️</span>
-            <span>Настройки</span>
+            <span>{t('settings')}</span>
           </button>
+
+          <div class="lang-row">
+            <span class="lang-label">{t('language')}</span>
+            <select class="lang-select" bind:value={$language} on:change={(e) => setLang(e.target.value)}>
+              <option value="ru">RU</option>
+              <option value="en">EN</option>
+            </select>
+          </div>
 
           <button class="menu-btn toggle-btn">
             <span class="icon">🌙</span>
@@ -109,7 +179,7 @@
 
           <button class="menu-btn logout-btn" on:click={logout}>
             <span class="icon">🚪</span>
-            <span>Выход</span>
+            <span>{t('logout')}</span>
           </button>
         </div>
 
@@ -122,18 +192,18 @@
     <!-- ПРОФИЛЬ -->
     {:else if activeTab === 'profile'}
       <div class="profile-view">
-        <div class="back-btn" on:click={() => switchTab('menu')}>← Назад</div>
+        <button type="button" class="back-btn" on:click={() => switchTab('menu')}>← Назад</button>
 
         <div class="profile-header">
           <div class="big-avatar" style="background: #FF6B6B;">
             {$currentUser?.username[0].toUpperCase()}
           </div>
-          <h2>Мой профиль</h2>
+          <h2>{t('myProfile')}</h2>
         </div>
 
         <div class="tab-content">
           <div class="profile-section">
-            <label for="name-input">Имя</label>
+            <label for="name-input">{t('name')}</label>
             <input
               id="name-input"
               type="text"
@@ -143,7 +213,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="status-input">Статус</label>
+            <label for="status-input">{t('status')}</label>
             <input
               id="status-input"
               type="text"
@@ -153,7 +223,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="phone-input">Номер телефона</label>
+            <label for="phone-input">{t('phone')}</label>
             <input
               id="phone-input"
               type="tel"
@@ -163,7 +233,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="email-input">Email</label>
+            <label for="email-input">{t('email')}</label>
             <input
               id="email-input"
               type="email"
@@ -180,7 +250,7 @@
             {#if isSaving}
               ⏳ Сохранение...
             {:else}
-              💾 Сохранить изменения
+              💾 {t('save')}
             {/if}
           </button>
 
@@ -195,12 +265,12 @@
     <!-- КОНТАКТЫ -->
     {:else if activeTab === 'contacts'}
       <div class="contacts-view">
-        <div class="back-btn" on:click={() => switchTab('menu')}>← Назад</div>
+        <button type="button" class="back-btn" on:click={() => switchTab('menu')}>← Назад</button>
 
-        <h2 class="contacts-title">Контакты</h2>
+        <h2 class="contacts-title">{t('contacts')}</h2>
 
         <button class="add-contact-btn" on:click={addContact}>
-          ➕ Добавить контакт
+          ➕ {t('addContact')}
         </button>
 
         <div class="contacts-list">
@@ -224,6 +294,7 @@
 
   </div>
 </div>
+{/if}
 
 <style>
   .drawer-overlay {
@@ -241,6 +312,27 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+  }
+
+  .lang-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    color: #b0b9c1;
+    background: rgba(0,0,0,0.15);
+    margin: 8px 10px;
+  }
+  .lang-label { font-size: 13px; }
+  .lang-select {
+    background: #242f3d;
+    border: 1px solid #080e13;
+    color: white;
+    border-radius: 8px;
+    padding: 6px 8px;
+    outline: none;
   }
 
   /* ===== ГЛАВНОЕ МЕНЮ ===== */
