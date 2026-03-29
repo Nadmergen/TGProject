@@ -41,6 +41,7 @@ const (
 	redisTimeout           = 3 * time.Second
 	dbTimeout              = 5 * time.Second
 	registrationOTPTTL      = 5 * time.Minute
+	resetPasswordOTPTTL     = 10 * time.Minute
 	twoFactorOTPTTL         = 5 * time.Minute
 	initRegisterCooldownTTL = 60 * time.Second
 	maxOTPAttempts          = 5
@@ -139,7 +140,7 @@ func (as *AuthService) InitRegisterHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Отправка email (мок)
+	// Отправка email
 	as.email.SendVerificationEmail(req.Email, otp, "Registration Code")
 
 	respondJSON(w, http.StatusOK, AuthResponse{
@@ -327,6 +328,121 @@ func (as *AuthService) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ForgotPasswordInitHandler – запрос кода для сброса пароля
+func (as *AuthService) ForgotPasswordInitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, AuthResponse{Status: "error", Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.Email = normalizeEmail(req.Email)
+	if req.Email == "" || !strings.Contains(req.Email, "@") {
+		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "Invalid request"})
+		return
+	}
+
+	// Проверяем, существует ли пользователь – но не раскрываем эту информацию наружу
+	ctxDB, cancelDB := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancelDB()
+	var userID int
+	err := as.db.QueryRowContext(ctxDB, "SELECT id FROM users WHERE email = $1", req.Email).Scan(&userID)
+	if err != nil && err != sql.ErrNoRows {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to process request"})
+		return
+	}
+
+	// Если пользователя нет – делаем вид, что всё ок (чтобы не раскрывать наличие аккаунта)
+	if err == sql.ErrNoRows {
+		respondJSON(w, http.StatusOK, AuthResponse{
+			Status:  "success",
+			Message: "If this email is registered, a reset code has been sent",
+		})
+		return
+	}
+
+	otp := generateOTP()
+	ctxRedis, cancelRedis := context.WithTimeout(r.Context(), redisTimeout)
+	defer cancelRedis()
+
+	if err := as.cache.Set(ctxRedis, fmt.Sprintf("reset_otp:%s", req.Email), otp, resetPasswordOTPTTL).Err(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to process request"})
+		return
+	}
+
+	as.email.SendVerificationEmail(req.Email, otp, "Password Reset Code")
+
+	respondJSON(w, http.StatusOK, AuthResponse{
+		Status:  "success",
+		Message: "Reset code sent to email",
+	})
+}
+
+// ForgotPasswordVerifyHandler – подтверждение кода и установка нового пароля
+func (as *AuthService) ForgotPasswordVerifyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, AuthResponse{Status: "error", Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Email       string `json:"email"`
+		Code        string `json:"code"`
+		NewPassword string `json:"new_password"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.Email = normalizeEmail(req.Email)
+	if req.Email == "" || req.Code == "" || req.NewPassword == "" {
+		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "Invalid request"})
+		return
+	}
+
+	ctxRedis, cancelRedis := context.WithTimeout(r.Context(), redisTimeout)
+	defer cancelRedis()
+
+	storedCode, err := as.cache.Get(ctxRedis, fmt.Sprintf("reset_otp:%s", req.Email)).Result()
+	if err != nil || storedCode != req.Code {
+		respondJSON(w, http.StatusUnauthorized, AuthResponse{Status: "error", Message: "Invalid or expired code"})
+		return
+	}
+
+	if err := as.cache.Del(ctxRedis, fmt.Sprintf("reset_otp:%s", req.Email)).Err(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to process request"})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to process request"})
+		return
+	}
+
+	ctxDB, cancelDB := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancelDB()
+	res, err := as.db.ExecContext(ctxDB, "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE email = $2", string(hashedPassword), req.Email)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to update password"})
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "User not found"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, AuthResponse{
+		Status:  "success",
+		Message: "Password updated",
+	})
+}
+
 // Verify2FAHandler – проверка 2FA
 func (as *AuthService) Verify2FAHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -387,6 +503,95 @@ func (as *AuthService) Verify2FAHandler(w http.ResponseWriter, r *http.Request) 
 		Message: "2FA verified",
 		Token:   token,
 		UserID:  req.UserID,
+	})
+}
+
+// QRAuthInitHandler – создать одноразовый QR-токен для авторизации
+func (as *AuthService) QRAuthInitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, AuthResponse{Status: "error", Message: "Method not allowed"})
+		return
+	}
+
+	userID, ok := getUserID(r)
+	if !ok {
+		respondJSON(w, http.StatusUnauthorized, AuthResponse{Status: "error", Message: "Unauthorized"})
+		return
+	}
+
+	token := generateToken()
+	ctx, cancel := context.WithTimeout(r.Context(), redisTimeout)
+	defer cancel()
+
+	if err := as.cache.Set(ctx, fmt.Sprintf("qr_login:%s", token), fmt.Sprintf("%d", userID), 5*time.Minute).Err(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to generate QR token"})
+		return
+	}
+
+	type qrResponse struct {
+		Status string `json:"status"`
+		Token  string `json:"token"`
+	}
+
+	respondJSON(w, http.StatusOK, qrResponse{
+		Status: "success",
+		Token:  token,
+	})
+}
+
+// QRAuthLoginHandler – войти по QR-токену
+func (as *AuthService) QRAuthLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, AuthResponse{Status: "error", Message: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "Invalid request"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), redisTimeout)
+	defer cancel()
+
+	val, err := as.cache.Get(ctx, fmt.Sprintf("qr_login:%s", req.Token)).Result()
+	if err != nil {
+		respondJSON(w, http.StatusUnauthorized, AuthResponse{Status: "error", Message: "Invalid or expired QR token"})
+		return
+	}
+	_ = as.cache.Del(ctx, fmt.Sprintf("qr_login:%s", req.Token)).Err()
+
+	var userID int
+	if _, err := fmt.Sscanf(val, "%d", &userID); err != nil || userID <= 0 {
+		respondJSON(w, http.StatusUnauthorized, AuthResponse{Status: "error", Message: "Invalid QR token data"})
+		return
+	}
+
+	ctxDB, cancelDB := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancelDB()
+
+	sessionToken := generateToken()
+	if _, err := as.db.ExecContext(
+		ctxDB,
+		"INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)",
+		userID, sessionToken, time.Now().Add(30*24*time.Hour),
+	); err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to create session"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, AuthResponse{
+		Status:  "success",
+		Message: "Login successful",
+		Token:   sessionToken,
+		UserID:  userID,
 	})
 }
 

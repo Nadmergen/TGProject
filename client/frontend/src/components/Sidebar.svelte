@@ -1,29 +1,114 @@
 <script>
-    import { showDrawer, isSidebarOpen, innerWidth, recipient } from '../stores';
+    import { onMount } from 'svelte';
+    import { showDrawer, isSidebarOpen, innerWidth, recipient, currentUser } from '../stores';
     import { setActiveRecipient } from '../chatService';
+    import { API_URL } from '../config';
 
-    function selectDefaultChat() {
-        setActiveRecipient(1, 'Общий чат');
+    let search = '';
+    let chats = [];
+    let isLoading = false;
+    let loadError = '';
+
+    function openChat(chat) {
+        setActiveRecipient(chat.id, chat.title);
         if ($innerWidth < 750) isSidebarOpen.set(false);
     }
+
+    function getInitials(title) {
+        if (!title) return '?';
+        const parts = title.trim().split(' ');
+        if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+
+    async function loadChats() {
+        isLoading = true;
+        loadError = '';
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/contacts`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'X-User-ID': $currentUser?.id?.toString() || ''
+                }
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(data.error || 'Не удалось загрузить список чатов');
+            }
+
+            // Преобразуем контакты в список чатов + добавляем "Избранное"
+            const contactChats = (data || []).map((c) => ({
+                id: c.id,
+                title: c.name,
+                lastMessage: c.last_message || '',
+            }));
+
+            chats = [
+                {
+                    id: $currentUser?.id,
+                    title: 'Избранное',
+                    lastMessage: '',
+                },
+                ...contactChats,
+            ];
+        } catch (e) {
+            loadError = 'Ошибка загрузки чатов';
+        }
+        isLoading = false;
+    }
+
+    const filteredChats = () => {
+        if (!search.trim()) return chats;
+        const q = search.trim().toLowerCase();
+        return chats.filter((c) => c.title.toLowerCase().includes(q));
+    };
+
+    onMount(() => {
+        loadChats();
+    });
 </script>
 
 <aside class="sidebar-root">
     <div class="sidebar-top">
-        <button class="burger-menu" on:click={() => showDrawer.set(true)}>☰</button>
+        <button class="burger-menu" on:click={() => showDrawer.set(true)} aria-label="Меню">☰</button>
         <div class="search-box">
-            <input type="text" placeholder="🔍 Поиск" />
+            <span class="search-icon">🔍</span>
+            <input
+                type="text"
+                bind:value={search}
+                placeholder="Поиск"
+            />
         </div>
     </div>
 
     <div class="items-container">
-        <button type="button" class="chat-row active" on:click={selectDefaultChat}>
-            <div class="chat-avatar-circle">O</div>
-            <div class="chat-meta">
-                <div class="chat-row-name">Общий чат</div>
-                <div class="chat-row-last">Добро пожаловать!</div>
-            </div>
-        </button>
+        {#if isLoading}
+            <div class="hint">Загрузка чатов...</div>
+        {:else if loadError}
+            <div class="hint error">{loadError}</div>
+        {:else if filteredChats().length === 0}
+            <div class="hint">Ничего не найдено</div>
+        {:else}
+            {#each filteredChats() as chat}
+                <button
+                    type="button"
+                    class="chat-row { $recipient && $recipient.id === chat.id ? 'active' : '' }"
+                    on:click={() => openChat(chat)}
+                >
+                    <div class="chat-avatar-circle">
+                        {getInitials(chat.title)}
+                    </div>
+                    <div class="chat-meta">
+                        <div class="chat-row-name">{chat.title}</div>
+                        {#if chat.lastMessage}
+                            <div class="chat-row-last">{chat.lastMessage}</div>
+                        {/if}
+                    </div>
+                </button>
+            {/each}
+        {/if}
     </div>
 </aside>
 
@@ -41,8 +126,9 @@
     height: 56px;
     display: flex;
     align-items: center;
-    padding: 0 12px;
-    gap: 12px;
+    padding: 0 8px;
+    gap: 8px;
+    border-bottom: 1px solid #080e13;
   }
 
   .burger-menu {
@@ -63,32 +149,55 @@
 
   .search-box {
     flex: 1;
+    position: relative;
   }
 
   .search-box input {
     width: 100%;
-    background: #242f3d;
-    border: 1px solid #080e13;
-    border-radius: 20px;
-    padding: 8px 15px;
+    background: #0e1621;
+    border: none;
+    border-radius: 18px;
+    padding: 8px 14px 8px 30px;
     color: white;
     outline: none;
-    font-size: 14px;
+    font-size: 13px;
     transition: 0.2s;
+    box-shadow: inset 0 0 0 1px #080e13;
+    box-sizing: border-box;
   }
 
   .search-box input:focus {
-    border-color: #4faeef;
-    background: #1f3347;
+    box-shadow: inset 0 0 0 1px #4faeef;
+    background: #17212b;
   }
 
   .search-box input::placeholder {
     color: #7f91a4;
   }
 
+  .search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 13px;
+    color: #7f91a4;
+    pointer-events: none;
+  }
+
   .items-container {
     flex: 1;
     overflow-y: auto;
+  }
+
+  .hint {
+    padding: 12px 16px;
+    color: #7f91a4;
+    font-size: 13px;
+  }
+
+  .hint.error {
+    color: #ef5350;
   }
 
   .chat-row {

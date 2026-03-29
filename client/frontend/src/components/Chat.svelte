@@ -10,13 +10,20 @@
     let text = "";
     let scrollBox;
     let fileInput;
+    let isRecording = false;
+    let rec;
+    let recChunks = [];
 
     async function handleSend() {
         if (!text.trim() || !$recipient?.id) return;
-        await sendTextMessage(text);
-        text = "";
-        await tick();
-        if (scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
+        try {
+            await sendTextMessage(text);
+            text = "";
+            await tick();
+            if (scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
+        } catch (e) {
+            alert(e?.message || 'Не удалось отправить сообщение');
+        }
     }
 
     async function handleBulkDelete() {
@@ -50,6 +57,34 @@
         fileInput.value = '';
     }
 
+    async function toggleVoiceRecord() {
+        if (isRecording) {
+            try { rec?.stop(); } catch (_) {}
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            recChunks = [];
+            rec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            rec.ondataavailable = (e) => { if (e.data?.size) recChunks.push(e.data); };
+            rec.onstop = async () => {
+                isRecording = false;
+                const blob = new Blob(recChunks, { type: 'audio/webm' });
+                const file = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+                stream.getTracks().forEach(t => t.stop());
+                try {
+                    await sendAttachment(file);
+                } catch (e) {
+                    alert(e?.message || 'Не удалось отправить голосовое');
+                }
+            };
+            rec.start();
+            isRecording = true;
+        } catch (e) {
+            alert('Нет доступа к микрофону');
+        }
+    }
+
     afterUpdate(() => {
         if (scrollBox && !$isSelectionMode) scrollBox.scrollTop = scrollBox.scrollHeight;
     });
@@ -70,9 +105,11 @@
     {:else}
         <header class="chat-header">
             <div class="chat-header-left">
-                <button class="sidebar-toggle-btn" on:click={toggleSidebar} title="Показать/скрыть список чатов">
-                    ☰
-                </button>
+                {#if $innerWidth <= 750}
+                    <button class="sidebar-toggle-btn" on:click={toggleSidebar} title="Показать/скрыть список чатов">
+                        ☰
+                    </button>
+                {/if}
                 <button type="button" class="chat-info-block" on:click={toggleInfo}>
                     <h2 class="chat-title">{$recipient?.username || 'Общий чат'}</h2>
                     <span class="chat-status">онлайн</span>
@@ -116,6 +153,9 @@
                 placeholder="Написать сообщение..."
                 class="message-input"
         />
+        <button class="icon-btn mic-btn {isRecording ? 'recording' : ''}" on:click={toggleVoiceRecord} title={isRecording ? "Остановить запись" : "Голосовое сообщение"}>
+            🎤
+        </button>
         <button class="send-btn" on:click={handleSend} disabled={!text.trim() || !$recipient?.id} title="Отправить (Enter)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M16.6915026,12.4744748 L3.50612381,13.2599618 C3.19218622,13.2599618 3.03521743,13.4170592 3.03521743,13.5741566 L1.15159189,20.0151496 C0.8376543,20.8006365 0.99,21.89 1.77946707,22.52 C2.41,22.99 3.50612381,23.1 4.13399899,22.8429026 L21.714504,14.0454487 C22.6563168,13.5741566 23.1272231,12.6315722 22.9702544,11.6889879 L4.13399899,1.16770959 C3.34915502,0.9106122 2.40734225,1.0177098 1.77946707,1.4890019 C0.994623095,2.1605983 0.837654326,3.10604706 1.15159189,3.89154405 L3.03521743,10.3325371 C3.03521743,10.4896346 3.19218622,10.646732 3.50612381,10.646732 L16.6915026,11.4322189 C16.6915026,11.4322189 17.1624089,11.4322189 17.1624089,12.0038152 C17.1624089,12.4744748 16.6915026,12.4744748 16.6915026,12.4744748 Z"></path>
@@ -242,6 +282,32 @@
     background: #4faeef;
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .mic-btn {
+    background: none;
+    border: none;
+    color: #7f91a4;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+    transition: 0.2s;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mic-btn:hover {
+    color: #4faeef;
+    background: rgba(79, 174, 239, 0.1);
+  }
+
+  .mic-btn.recording {
+    color: white;
+    background: #c62828;
   }
 
   .empty {

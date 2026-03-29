@@ -133,18 +133,57 @@ function cleanup() {
 export async function handleSignalingMessage(msg) {
   if (!msg?.event) return;
   if (msg.event === 'call_offer') {
-    // incoming call offer
+    const nextType = msg.call_type || 'voice';
+
+    // renegotiation while already in call
+    const st = get(callState);
+    if (st.active && pc) {
+      // reflect call type upgrade in UI
+      callState.update(s => ({
+        ...s,
+        callType: nextType,
+        cameraOff: nextType !== 'video' ? true : s.cameraOff
+      }));
+
+      // if upgrading to video, ensure we have a local video track
+      if (nextType === 'video' && localStream && localStream.getVideoTracks().length === 0) {
+        try {
+          const v = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          const vTrack = v.getVideoTracks()[0];
+          if (vTrack) {
+            localStream.addTrack(vTrack);
+            pc.addTrack(vTrack, localStream);
+            callState.update(s => ({ ...s, callType: 'video', cameraOff: false }));
+          }
+        } catch (_) {}
+      }
+
+      await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      if (ws && st.peerUserId) {
+        ws.send(JSON.stringify({
+          event: 'call_answer',
+          recipient_id: st.peerUserId,
+          sdp: answer,
+          call_type: nextType
+        }));
+      }
+      return;
+    }
+
+    // incoming call offer (fresh)
     callState.set({
       active: false,
       incoming: true,
-      callType: msg.call_type || 'voice',
+      callType: nextType,
       peerUserId: msg.sender_id,
       peerUsername: '',
       muted: false,
-      cameraOff: (msg.call_type || 'voice') !== 'video',
+      cameraOff: nextType !== 'video',
     });
 
-    const peer = await ensurePeerConnection(msg.call_type || 'voice');
+    const peer = await ensurePeerConnection(nextType);
     await peer.setRemoteDescription(new RTCSessionDescription(msg.sdp));
     return;
   }
@@ -187,5 +226,30 @@ export function toggleCamera() {
   const enabledNow = tracks.some(t => t.enabled);
   tracks.forEach(t => t.enabled = !enabledNow);
   callState.update(s => ({ ...s, cameraOff: enabledNow }));
+}
+
+export async function enableVideo() {
+  const st = get(callState);
+  if (!st.active || !pc || !ws || !st.peerUserId) return;
+  if (!localStream) return;
+  if (localStream.getVideoTracks().length > 0) {
+    callState.update(s => ({ ...s, callType: 'video', cameraOff: false }));
+    return;
+  }
+  const v = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  const vTrack = v.getVideoTracks()[0];
+  if (!vTrack) return;
+  localStream.addTrack(vTrack);
+  pc.addTrack(vTrack, localStream);
+  callState.update(s => ({ ...s, callType: 'video', cameraOff: false }));
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({
+    event: 'call_offer',
+    recipient_id: st.peerUserId,
+    sdp: offer,
+    call_type: 'video'
+  }));
 }
 

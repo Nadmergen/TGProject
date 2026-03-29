@@ -7,12 +7,14 @@
     import Chat from './components/Chat.svelte';
     import Drawer from './components/Drawer.svelte';
     import CallOverlay from './components/CallOverlay.svelte';
+    import ContactInfo from './components/ContactInfo.svelte';
 
     let step = 'login';
     let email = '', code = '', username = '', password = '';
     let err = '', successMsg = '';
     let isLoading = false;
     let userID = 0;
+    let showInfo = false;
 
     // При изменении ширины окна
     $: if ($innerWidth <= 750 && $isSidebarOpen) isSidebarOpen.set(false);
@@ -21,7 +23,8 @@
     $: if ($isLoggedIn) {
         initChat();
         if (!$recipient) {
-            setActiveRecipient(1, 'Общий чат');
+            // "Избранное" (чат с самим собой) вместо несуществующего "общего чата"
+            if ($currentUser?.id) setActiveRecipient($currentUser.id, 'Избранное');
         }
     }
 
@@ -150,6 +153,12 @@
                 <button on:click={stepLogin} class="main-btn" disabled={isLoading}>
                     {isLoading ? '⏳ Загрузка...' : 'Войти'}
                 </button>
+                <button class="text-btn" on:click={() => { step = 'forgot-email'; err = ''; successMsg = ''; }}>
+                    Забыли пароль?
+                </button>
+                <button class="text-btn" on:click={() => { step = 'qr-login'; err = ''; successMsg = ''; }}>
+                    Войти по QR
+                </button>
                 <button class="text-btn" on:click={() => { step = 'register-email'; err = ''; }}>
                     Создать аккаунт
                 </button>
@@ -164,7 +173,7 @@
                     {isLoading ? '⏳ Отправка...' : 'Получить код'}
                 </button>
                 <button class="text-btn" on:click={() => { step = 'login'; err = ''; }}>
-                    Уже есть аккаунт? Войти
+                    ← Назад к входу
                 </button>
 
             {:else if step === 'verify-code'}
@@ -179,6 +188,9 @@
                 <button on:click={stepVerifyCode} class="main-btn" disabled={isLoading}>
                     Создать аккаунт
                 </button>
+                <button class="text-btn" on:click={() => { step = 'register-email'; err = ''; }}>
+                    ← Назад
+                </button>
 
             {:else if step === 'verify-2fa'}
                 <h2>2FA</h2>
@@ -186,6 +198,138 @@
                     <input bind:value={code} placeholder="Код подтверждения" maxlength="6" disabled={isLoading} />
                 </div>
                 <button on:click={stepVerify2FA} class="main-btn" disabled={isLoading}>Подтвердить</button>
+                <button class="text-btn" on:click={() => { step = 'login'; err = ''; }}>
+                    ← Назад к входу
+                </button>
+            {:else if step === 'forgot-email'}
+                <h2>Восстановление пароля</h2>
+                <p class="info-text">Укажите email, на который зарегистрирован аккаунт.</p>
+                <div class="input-group">
+                    <input bind:value={email} type="email" placeholder="Ваш Email" disabled={isLoading} />
+                </div>
+                <button
+                        class="main-btn"
+                        disabled={isLoading}
+                        on:click={async () => {
+                            err = '';
+                            successMsg = '';
+                            if (!email.trim()) {
+                                err = 'Введите email';
+                                return;
+                            }
+                            isLoading = true;
+                            try {
+                                const res = await fetch(`${API_URL}/api/auth/forgot-password`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ email })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.status === 'success') {
+                                    successMsg = 'Код для сброса отправлен на почту. Проверьте, пожалуйста, папку Спам.';
+                                    step = 'forgot-verify';
+                                } else {
+                                    err = data.message || 'Не удалось отправить код';
+                                }
+                            } catch (_) {
+                                err = 'Ошибка соединения';
+                            }
+                            isLoading = false;
+                        }}
+                >
+                    {isLoading ? '⏳ Отправка...' : 'Получить код'}
+                </button>
+                <button class="text-btn" on:click={() => { step = 'login'; err = ''; successMsg = ''; }}>
+                    ← Назад к входу
+                </button>
+            {:else if step === 'forgot-verify'}
+                <h2>Новый пароль</h2>
+                <p class="info-text">Введите код из письма и новый пароль для {email}.</p>
+                <div class="input-group">
+                    <input bind:value={code} placeholder="Код из письма" maxlength="6" disabled={isLoading} />
+                    <input bind:value={password} type="password" placeholder="Новый пароль" disabled={isLoading} />
+                </div>
+                <button
+                        class="main-btn"
+                        disabled={isLoading}
+                        on:click={async () => {
+                            err = '';
+                            successMsg = '';
+                            if (!code.trim() || !password.trim()) {
+                                err = 'Заполните все поля';
+                                return;
+                            }
+                            isLoading = true;
+                            try {
+                                const res = await fetch(`${API_URL}/api/auth/reset-password`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ email, code, new_password: password })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.status === 'success') {
+                                    successMsg = 'Пароль успешно обновлён. Теперь вы можете войти.';
+                                    step = 'login';
+                                } else {
+                                    err = data.message || 'Не удалось обновить пароль';
+                                }
+                            } catch (_) {
+                                err = 'Ошибка соединения';
+                            }
+                            isLoading = false;
+                        }}
+                >
+                    {isLoading ? '⏳ Сохранение...' : 'Сохранить новый пароль'}
+                </button>
+                <button class="text-btn" on:click={() => { step = 'forgot-email'; err = ''; successMsg = ''; }}>
+                    ← Назад
+                </button>
+            {:else if step === 'qr-login'}
+                <h2>Вход по QR</h2>
+                <p class="info-text">
+                    Попросите приложение на другом устройстве с вашим аккаунтом показать QR и отсканируйте его.
+                    После сканирования вы получите код, который нужно вставить ниже.
+                </p>
+                <div class="input-group">
+                    <input bind:value={code} placeholder="QR код (из другого устройства)" disabled={isLoading} />
+                </div>
+                <button
+                        class="main-btn"
+                        disabled={isLoading}
+                        on:click={async () => {
+                            err = '';
+                            successMsg = '';
+                            if (!code.trim()) {
+                                err = 'Введите код';
+                                return;
+                            }
+                            isLoading = true;
+                            try {
+                                const res = await fetch(`${API_URL}/api/auth/qr-login`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ token: code.trim() })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.status === 'success') {
+                                    localStorage.setItem('token', data.token);
+                                    localStorage.setItem('user_id', data.user_id);
+                                    currentUser.set({ username, id: data.user_id });
+                                    isLoggedIn.set(true);
+                                } else {
+                                    err = data.message || 'Не удалось войти по QR';
+                                }
+                            } catch (_) {
+                                err = 'Ошибка соединения';
+                            }
+                            isLoading = false;
+                        }}
+                >
+                    {isLoading ? '⏳ Вход...' : 'Войти'}
+                </button>
+                <button class="text-btn" on:click={() => { step = 'login'; err = ''; successMsg = ''; }}>
+                    ← Назад к входу
+                </button>
             {/if}
         </div>
     </div>
@@ -197,8 +341,13 @@
             </div>
         {/if}
         <div class="chat-wrapper">
-            <Chat toggleInfo={() => {}} />
+            <Chat toggleInfo={() => { showInfo = !showInfo; }} />
         </div>
+        {#if showInfo && $innerWidth > 900}
+            <div class="info-wrapper">
+                <ContactInfo />
+            </div>
+        {/if}
     </div>
     <Drawer />
     <CallOverlay />
@@ -348,5 +497,10 @@
   .chat-wrapper {
       flex: 1;
       min-width: 0;
+  }
+
+  .info-wrapper {
+      width: 320px;
+      flex-shrink: 0;
   }
 </style>

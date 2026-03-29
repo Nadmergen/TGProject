@@ -109,7 +109,10 @@ export async function sendTextMessage(content) {
             file_name: ''
         })
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to send message');
+    }
     if (res.ok) {
         // Оптимистично добавляем в историю (можно дождаться WebSocket)
         chatHistory.update(h => [...h, {

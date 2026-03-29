@@ -26,6 +26,25 @@ var (
 
 func init() {
 	godotenv.Load()
+	// defaults for local development (docker-compose)
+	if os.Getenv("DB_HOST") == "" {
+		os.Setenv("DB_HOST", "localhost")
+	}
+	if os.Getenv("DB_PORT") == "" {
+		os.Setenv("DB_PORT", "5432")
+	}
+	if os.Getenv("DB_USER") == "" {
+		os.Setenv("DB_USER", "messenger")
+	}
+	if os.Getenv("DB_PASSWORD") == "" {
+		os.Setenv("DB_PASSWORD", "your_secure_password_123")
+	}
+	if os.Getenv("DB_NAME") == "" {
+		os.Setenv("DB_NAME", "messenger_db")
+	}
+	if os.Getenv("REDIS_URL") == "" {
+		os.Setenv("REDIS_URL", "localhost:6379")
+	}
 	// Инициализируем email сервис
 	emailService = NewSMTPEmailService()
 }
@@ -78,6 +97,10 @@ func main() {
 	mux.HandleFunc("/api/auth/verify-code", authService.VerifyCodeHandler)
 	mux.HandleFunc("/api/auth/login", authService.LoginHandler)
 	mux.HandleFunc("/api/auth/verify-2fa", authService.Verify2FAHandler)
+	mux.HandleFunc("/api/auth/forgot-password", authService.ForgotPasswordInitHandler)
+	mux.HandleFunc("/api/auth/reset-password", authService.ForgotPasswordVerifyHandler)
+	mux.Handle("/api/auth/qr-init", mw.AuthRequired(http.HandlerFunc(authService.QRAuthInitHandler)))
+	mux.HandleFunc("/api/auth/qr-login", authService.QRAuthLoginHandler)
 	mux.HandleFunc("/api/auth/logout", authService.LogoutHandler)
 	mux.Handle("/api/messages/read", mw.AuthRequired(http.HandlerFunc(messageService.MarkAsReadHandler)))
 

@@ -1,8 +1,9 @@
 <script>
-    import { showDrawer, currentUser, isLoggedIn, language } from '../stores';
+    import { showDrawer, currentUser, isLoggedIn, language, theme } from '../stores';
     import { fade, fly } from 'svelte/transition';
     import { API_URL } from '../config';
-    import { t, setLang } from '../i18n';
+    import { t, setLang, currentDict } from '../i18n';
+    import QRCodeView from './QRCodeView.svelte';
 
     let activeTab = 'menu';
     let contacts = [];
@@ -15,6 +16,8 @@
         phone: '',
         email: ''
     };
+    let qrToken = '';
+    let isQRLoading = false;
 
     function switchTab(tab) {
         activeTab = tab;
@@ -49,6 +52,26 @@
         isSaving = false;
     }
 
+    async function generateQR() {
+        if (!$currentUser) return;
+        if (qrToken) { qrToken = ''; return; } // повторное нажатие скрывает QR
+        isQRLoading = true;
+        qrToken = '';
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/auth/qr-init`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'success') {
+                qrToken = data.token;
+            }
+        } catch (_) {
+        }
+        isQRLoading = false;
+    }
+
     async function logout() {
         if (confirm("Вы уверены, что хотите выйти?")) {
             const token = localStorage.getItem('token');
@@ -71,32 +94,44 @@
     }
 
     function addContact() {
-        const name = prompt(t('contactNamePrompt'));
-        if (!name) return;
+        const username = prompt('Username (логин пользователя)');
+        if (!username) return;
+        const name = prompt(t('contactNamePrompt')) || username;
         const phone = prompt(t('contactPhonePrompt')) || '';
-        createContact(name, phone);
+        createContact(name, phone, username);
     }
 
     async function loadContacts() {
         try {
             const token = localStorage.getItem('token');
             const res = await fetch(`${API_URL}/api/contacts`, {
-                headers: { 'Authorization': `Bearer ${token}` }
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'X-User-ID': $currentUser?.id?.toString() || ''
+                }
             });
             const data = await res.json();
             if (res.ok) contacts = data;
         } catch (_) {}
     }
 
-    async function createContact(name, phone) {
+    async function createContact(name, phone, username) {
         try {
             const token = localStorage.getItem('token');
             const res = await fetch(`${API_URL}/api/contacts/add`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ name, phone })
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    'X-User-ID': $currentUser?.id?.toString() || ''
+                },
+                body: JSON.stringify({ name, phone, username })
             });
-            await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert(data.error || 'Не удалось добавить контакт');
+                return;
+            }
             await loadContacts();
         } catch (_) {}
     }
@@ -118,7 +153,7 @@
             {$currentUser?.username ? $currentUser.username[0].toUpperCase() : 'U'}
           </div>
           <div class="user-meta">
-            <div class="user-name">{$currentUser?.username}</div>
+            <div class="user-name">{$currentUser?.username || 'undefined'}</div>
             <button class="status-btn" on:click={() => switchTab('profile')}>
               {$currentUser?.status || t('setEmojiStatus')}
               <span class="dropdown">∨</span>
@@ -129,12 +164,12 @@
         <div class="menu-list">
           <button class="menu-btn" on:click={() => switchTab('profile')}>
             <span class="icon">👤</span>
-            <span>{t('myProfile')}</span>
+            <span>{$currentDict.myProfile}</span>
           </button>
 
           <button class="menu-btn" on:click={() => switchTab('contacts')}>
             <span class="icon">📞</span>
-            <span>{t('contacts')}</span>
+            <span>{$currentDict.contacts}</span>
             <span class="badge">НОВОЕ</span>
           </button>
 
@@ -153,33 +188,31 @@
             <span>Избранное</span>
           </button>
 
-          <button class="menu-btn">
+          <button class="menu-btn" on:click={generateQR}>
+            <span class="icon">🔳</span>
+            <span>Мой QR для входа</span>
+          </button>
+
+          {#if qrToken}
+            <div class="qr-box">
+              <div class="qr-label">Отсканируйте QR, чтобы войти на другом устройстве:</div>
+              <QRCodeView text={qrToken} />
+              <div class="qr-token">{qrToken}</div>
+            </div>
+          {/if}
+
+          <button class="menu-btn" on:click={() => switchTab('settings')}>
             <span class="icon">⚙️</span>
-            <span>{t('settings')}</span>
+            <span>{$currentDict.settings}</span>
           </button>
 
-          <div class="lang-row">
-            <span class="lang-label">{t('language')}</span>
-            <select class="lang-select" bind:value={$language} on:change={(e) => setLang(e.target.value)}>
-              <option value="ru">RU</option>
-              <option value="en">EN</option>
-            </select>
-          </div>
-
-          <button class="menu-btn toggle-btn">
-            <span class="icon">🌙</span>
-            <span>Ночной режим</span>
-            <span class="toggle">
-              <input type="checkbox" checked />
-              <span class="slider"></span>
-            </span>
-          </button>
+          <!-- Язык/тема будут внутри "Настройки" -->
 
           <hr />
 
           <button class="menu-btn logout-btn" on:click={logout}>
             <span class="icon">🚪</span>
-            <span>{t('logout')}</span>
+            <span>{$currentDict.logout}</span>
           </button>
         </div>
 
@@ -198,12 +231,12 @@
           <div class="big-avatar" style="background: #FF6B6B;">
             {$currentUser?.username[0].toUpperCase()}
           </div>
-          <h2>{t('myProfile')}</h2>
+          <h2>{$currentDict.myProfile}</h2>
         </div>
 
         <div class="tab-content">
           <div class="profile-section">
-            <label for="name-input">{t('name')}</label>
+            <label for="name-input">{$currentDict.name}</label>
             <input
               id="name-input"
               type="text"
@@ -213,7 +246,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="status-input">{t('status')}</label>
+            <label for="status-input">{$currentDict.status}</label>
             <input
               id="status-input"
               type="text"
@@ -223,7 +256,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="phone-input">{t('phone')}</label>
+            <label for="phone-input">{$currentDict.phone}</label>
             <input
               id="phone-input"
               type="tel"
@@ -233,7 +266,7 @@
           </div>
 
           <div class="profile-section">
-            <label for="email-input">{t('email')}</label>
+            <label for="email-input">{$currentDict.email}</label>
             <input
               id="email-input"
               type="email"
@@ -250,7 +283,7 @@
             {#if isSaving}
               ⏳ Сохранение...
             {:else}
-              💾 {t('save')}
+              💾 {$currentDict.save}
             {/if}
           </button>
 
@@ -288,6 +321,29 @@
           {:else}
             <div class="empty-contacts">Контактов пока нет</div>
           {/if}
+        </div>
+      </div>
+    {:else if activeTab === 'settings'}
+      <div class="profile-view">
+        <button type="button" class="back-btn" on:click={() => switchTab('menu')}>← Назад</button>
+        <div class="profile-header">
+          <h2>{$currentDict.settings}</h2>
+        </div>
+        <div class="tab-content">
+          <div class="settings-row">
+            <div class="settings-label">{$currentDict.language}</div>
+            <select class="lang-select" bind:value={$language} on:change={(e) => setLang(e.target.value)}>
+              <option value="ru">RU</option>
+              <option value="en">EN</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Тема</div>
+            <select class="lang-select" bind:value={$theme}>
+              <option value="dark">Тёмная</option>
+              <option value="light">Светлая</option>
+            </select>
+          </div>
         </div>
       </div>
     {/if}
@@ -333,6 +389,20 @@
     border-radius: 8px;
     padding: 6px 8px;
     outline: none;
+  }
+
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid #0e1621;
+  }
+
+  .settings-label {
+    color: #b0b9c1;
+    font-size: 13px;
   }
 
   /* ===== ГЛАВНОЕ МЕНЮ ===== */
@@ -711,5 +781,31 @@
     color: #7f91a4;
     padding: 40px 20px;
     font-size: 14px;
+  }
+
+  .qr-box {
+    margin: 10px 16px 0;
+    padding: 12px;
+    border-radius: 12px;
+    background: #0e1621;
+    border: 1px solid #080e13;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .qr-label {
+    font-size: 12px;
+    color: #b0b9c1;
+    text-align: center;
+  }
+
+  .qr-token {
+    font-family: "Courier New", monospace;
+    font-size: 11px;
+    color: #7f91a4;
+    word-break: break-all;
+    text-align: center;
   }
 </style>

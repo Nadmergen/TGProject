@@ -1,9 +1,13 @@
 <script>
   import { onDestroy } from 'svelte';
-  import { callState, getLocalStream, getRemoteStream, hangup, toggleMute, toggleCamera, sendAnswer, acceptIncomingCall } from '../callService';
+  import { callState, getLocalStream, getRemoteStream, hangup, toggleMute, toggleCamera, enableVideo, sendAnswer, acceptIncomingCall } from '../callService';
 
   let localVideo;
   let remoteVideo;
+  let raf = 0;
+  let audioCtx;
+  let localLevel = 0;
+  let remoteLevel = 0;
 
   function bindStreams() {
     const ls = getLocalStream();
@@ -14,12 +18,74 @@
 
   $: bindStreams();
 
+  function stopMeters() {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    try { audioCtx?.close(); } catch (_) {}
+    audioCtx = null;
+    localLevel = 0;
+    remoteLevel = 0;
+  }
+
+  function startMeters() {
+    stopMeters();
+    const ls = getLocalStream();
+    const rs = getRemoteStream();
+    if (!ls && !rs) return;
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    const mkMeter = (stream) => {
+      if (!stream) return null;
+      const hasAudio = stream.getAudioTracks().length > 0;
+      if (!hasAudio) return null;
+      const src = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      return { analyser, data };
+    };
+
+    const lm = mkMeter(ls);
+    const rm = mkMeter(rs);
+
+    const loop = () => {
+      const calc = (m) => {
+        if (!m) return 0;
+        m.analyser.getByteTimeDomainData(m.data);
+        let sum = 0;
+        for (let i = 0; i < m.data.length; i++) {
+          const v = (m.data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / m.data.length);
+        return Math.min(1, rms * 2.2);
+      };
+
+      localLevel = calc(lm);
+      remoteLevel = calc(rm);
+      raf = requestAnimationFrame(loop);
+    };
+
+    raf = requestAnimationFrame(loop);
+  }
+
+  $: if ($callState.active) {
+    // restart meters when call starts or upgrades to video
+    startMeters();
+  } else {
+    stopMeters();
+  }
+
   async function accept() {
     await acceptIncomingCall();
     await sendAnswer();
   }
 
-  onDestroy(() => {});
+  onDestroy(() => {
+    stopMeters();
+  });
 </script>
 
 {#if $callState.incoming}
@@ -38,20 +104,46 @@
 {#if $callState.active}
   <div class="call-overlay">
     <div class="call-ui">
-      <div class="videos { $callState.callType !== 'video' ? 'voice' : '' }">
-        <video bind:this={remoteVideo} autoplay playsinline class="remote">
-          <track kind="captions" />
-        </video>
-        <video bind:this={localVideo} autoplay muted playsinline class="local">
-          <track kind="captions" />
-        </video>
-      </div>
+      {#if $callState.callType === 'video'}
+        <div class="videos">
+          <video bind:this={remoteVideo} autoplay playsinline class="remote">
+            <track kind="captions" />
+          </video>
+          <video bind:this={localVideo} autoplay muted playsinline class="local">
+            <track kind="captions" />
+          </video>
+        </div>
+      {:else}
+        <div class="voice-ui">
+          <div class="voice-avatar">
+            {#if $callState.peerUsername}
+              {$callState.peerUsername[0].toUpperCase()}
+            {:else}
+              ?
+            {/if}
+          </div>
+          <div class="voice-title">Голосовой звонок</div>
+        </div>
+      {/if}
 
       <div class="controls">
-        <button class="btn" on:click={toggleMute}>{$callState.muted ? 'Вкл микрофон' : 'Выкл микрофон'}</button>
+        <button class="btn" on:click={toggleMute}>
+          {$callState.muted ? 'Вкл микрофон' : 'Выкл микрофон'}
+          <span class="meter" title="Уровень микрофона">
+            <span class="bar" style="width: {Math.round(localLevel * 100)}%"></span>
+          </span>
+        </button>
         {#if $callState.callType === 'video'}
           <button class="btn" on:click={toggleCamera}>{$callState.cameraOff ? 'Вкл камеру' : 'Выкл камеру'}</button>
+        {:else}
+          <button class="btn" on:click={enableVideo}>Включить видео</button>
         {/if}
+        <div class="remote-meter" title="Уровень входящего звука">
+          <span class="label">Звук</span>
+          <span class="meter">
+            <span class="bar" style="width: {Math.round(remoteLevel * 100)}%"></span>
+          </span>
+        </div>
         <button class="btn hangup" on:click={hangup}>Завершить</button>
       </div>
     </div>
@@ -102,9 +194,6 @@
     background: black;
     height: min(520px, 60vh);
   }
-  .videos.voice {
-    height: 200px;
-  }
   video.remote { width: 100%; height: 100%; object-fit: cover; }
   video.local {
     position: absolute;
@@ -122,6 +211,63 @@
     gap: 10px;
     padding: 12px;
     background: #17212b;
+    align-items: center;
+  }
+
+  .meter {
+    display: inline-flex;
+    width: 70px;
+    height: 6px;
+    margin-left: 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.12);
+    overflow: hidden;
+    vertical-align: middle;
+  }
+  .meter .bar {
+    height: 100%;
+    background: #4faeef;
+    width: 0%;
+  }
+  .remote-meter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b0b9c1;
+    font-size: 12px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.15);
+    height: 36px;
+  }
+  .remote-meter .label { opacity: 0.9; }
+
+  .voice-ui {
+    height: 260px;
+    background: #0b111a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .voice-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: #4faeef;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 34px;
+    font-weight: 700;
+  }
+
+  .voice-title {
+    color: #b0b9c1;
+    font-size: 14px;
   }
 </style>
 

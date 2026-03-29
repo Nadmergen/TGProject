@@ -15,6 +15,7 @@ export const showDrawer = writable(false);
 export const isSidebarOpen = writable(window.innerWidth > 750);
 export const innerWidth = writable(window.innerWidth);
 export const language = writable(localStorage.getItem('lang') || 'ru');
+export const theme = writable(localStorage.getItem('theme') || 'dark');
 
 // Фильтры медиа
 export const mediaFiles = derived(chatHistory, ($h) => $h.filter(m => m.type === 'image'));
@@ -28,3 +29,8 @@ if (typeof window !== 'undefined') {
         if (window.innerWidth <= 750) isSidebarOpen.set(false);
     });
 }
+
+// Persist theme changes
+theme.subscribe((v) => {
+    try { localStorage.setItem('theme', v); } catch (_) {}
+});

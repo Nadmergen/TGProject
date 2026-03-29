@@ -1,4 +1,4 @@
-import { get } from 'svelte/store';
+import { get, derived } from 'svelte/store';
 import { language } from './stores';
 
 const dict = {
@@ -49,4 +49,7 @@ export function setLang(lang) {
   language.set(lang);
   try { localStorage.setItem('lang', lang); } catch (_) {}
 }
+
+// Реактивный словарь для использования через $currentDict в компонентах
+export const currentDict = derived(language, (lang) => dict[lang] || dict.ru);
 
