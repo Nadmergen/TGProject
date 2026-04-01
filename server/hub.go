@@ -48,21 +48,20 @@ func (h *Hub) Run() {
 				log.Printf("❌ Client disconnected. Total: %d", len(h.clients))
 			}
 
-		case message := <-h.broadcast:
+				case message := <-h.broadcast:
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					// Если буфер переполнен, закрываем клиента
-					go func(c *Client) {
-						h.unregister <- c
-						c.conn.Close()
-					}(client)
+					client.conn.Close()
+					// unregister will be called by client's readPump/writePump 
+					// or we can call it here but carefully
 				}
 			}
 		}
 	}
 }
+
 
 func (h *Hub) SendToUser(userID int64, payload interface{}) {
 	if userID <= 0 {
@@ -72,10 +71,8 @@ func (h *Hub) SendToUser(userID int64, payload interface{}) {
 		select {
 		case c.send <- payload:
 		default:
-			go func(cl *Client) {
-				h.unregister <- cl
-				cl.conn.Close()
-			}(c)
+			c.conn.Close()
 		}
 	}
 }
+

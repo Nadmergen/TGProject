@@ -74,9 +74,10 @@ func (ms *MessageService) SendMessageHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Инвалидируем кеш
-	ms.cache.Del(context.Background(), fmt.Sprintf("messages:%d", userID))
-	ms.cache.Del(context.Background(), fmt.Sprintf("messages:%d", req.RecipientID))
+		// Инвалидируем все страницы кеша для обоих пользователей
+	ms.invalidateUserMessagesCache(userID)
+	ms.invalidateUserMessagesCache(int64(req.RecipientID))
+
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"id":     msgID,
@@ -264,9 +265,19 @@ func (ms *MessageService) DeleteMessageHandler(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	ms.cache.Del(context.Background(), fmt.Sprintf("messages:%d", userID))
+		ms.invalidateUserMessagesCache(userID)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+
+func (ms *MessageService) invalidateUserMessagesCache(userID int64) {
+	ctx := context.Background()
+	pattern := fmt.Sprintf("messages:%d:*", userID)
+	iter := ms.cache.Scan(ctx, 0, pattern, 0).Iterator()
+	for iter.Next(ctx) {
+		ms.cache.Del(ctx, iter.Val())
+	}
+}
+
 
 // MarkAsReadHandler – пометить сообщение как прочитанное
 func (ms *MessageService) MarkAsReadHandler(w http.ResponseWriter, r *http.Request) {

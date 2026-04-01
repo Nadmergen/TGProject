@@ -204,23 +204,28 @@ func (as *AuthService) VerifyCodeHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var userID int
-	ctxDB, cancelDB := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancelDB()
+		// Транзакция для создания пользователя и сессии
+	tx, err := as.db.BeginTx(ctxDB, nil)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Internal server error"})
+		return
+	}
+	defer tx.Rollback()
 
-	err = as.db.QueryRowContext(
+	var userID int
+	err = tx.QueryRowContext(
 		ctxDB,
 		"INSERT INTO users (username, email, phone, password_hash, is_verified) VALUES ($1, $2, $3, $4, true) RETURNING id",
 		req.Username, req.Email, req.Phone, string(hashedPassword),
 	).Scan(&userID)
 	if err != nil {
 		log.Printf("❌ Registration error: %v", err)
-		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "Registration failed"})
+		respondJSON(w, http.StatusBadRequest, AuthResponse{Status: "error", Message: "Username or email already exists"})
 		return
 	}
 
 	token := generateToken()
-	if _, err := as.db.ExecContext(
+	if _, err := tx.ExecContext(
 		ctxDB,
 		"INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)",
 		userID, token, time.Now().Add(30*24*time.Hour),
@@ -228,6 +233,12 @@ func (as *AuthService) VerifyCodeHandler(w http.ResponseWriter, r *http.Request)
 		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Failed to create session"})
 		return
 	}
+
+	if err := tx.Commit(); err != nil {
+		respondJSON(w, http.StatusInternalServerError, AuthResponse{Status: "error", Message: "Finalization failed"})
+		return
+	}
+
 
 	log.Printf("✅ User registered: %s (ID: %d)", req.Username, userID)
 
